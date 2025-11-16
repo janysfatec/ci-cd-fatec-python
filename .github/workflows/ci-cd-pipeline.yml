@@ -91,35 +91,53 @@ jobs:
         with:
           category: "/language:python"
           upload: true
-          output: sarif-results
           
-      # PASSO 7: Verifica vulnerabilidades críticas e falha se encontradas
-      - name: 🚫 Bloquear pipeline se houver vulnerabilidades críticas
+      # PASSO 7: Aguarda processamento dos resultados
+      - name: ⏳ Aguardar processamento do CodeQL
         run: |
-          echo "🔍 Verificando resultados da análise CodeQL..."
+          echo "⏳ Aguardando o GitHub processar os resultados do CodeQL..."
+          sleep 10
           
-          # Verifica se existem arquivos SARIF com resultados
-          if [ -d "sarif-results" ]; then
-            # Conta vulnerabilidades high/critical
-            CRITICAL_COUNT=$(find sarif-results -name "*.sarif" -exec jq '[.runs[].results[] | select(.level == "error" or .level == "warning")] | length' {} + 2>/dev/null | awk '{sum+=$1} END {print sum}')
-            
-            if [ ! -z "$CRITICAL_COUNT" ] && [ "$CRITICAL_COUNT" -gt 0 ]; then
-              echo "❌ FALHA: Encontradas $CRITICAL_COUNT vulnerabilidade(s) no código!"
-              echo "🔒 A pipeline será bloqueada para prevenir deploy de código inseguro."
-              echo "📋 Verifique os detalhes em: https://github.com/${{ github.repository }}/security/code-scanning"
-              exit 1
-            else
-              echo "✅ Nenhuma vulnerabilidade crítica encontrada."
-            fi
+      # PASSO 8: Verifica alertas de segurança via API do GitHub
+      - name: 🚫 Bloquear se houver vulnerabilidades
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "🔍 Verificando alertas de Code Scanning..."
+          
+          # Busca alertas ativos via API do GitHub
+          ALERTS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/code-scanning/alerts?state=open&ref=refs/heads/main")
+          
+          # Conta o número de alertas
+          ALERT_COUNT=$(echo "$ALERTS" | jq '. | length' 2>/dev/null || echo "0")
+          
+          echo "📊 Total de alertas abertos: $ALERT_COUNT"
+          
+          if [ "$ALERT_COUNT" -gt 0 ]; then
+            echo ""
+            echo "❌ ============================================"
+            echo "❌ PIPELINE BLOQUEADA POR VULNERABILIDADES"
+            echo "❌ ============================================"
+            echo "🔒 Foram encontradas $ALERT_COUNT vulnerabilidade(s) de segurança!"
+            echo ""
+            echo "📋 Detalhes dos alertas:"
+            echo "$ALERTS" | jq -r '.[] | "  • [\(.rule.severity | ascii_upcase)] \(.rule.description) em \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"' 2>/dev/null || echo "$ALERTS" | jq -r '.[] | "  • \(.rule.description)"'
+            echo ""
+            echo "🔗 Veja mais em: https://github.com/${{ github.repository }}/security/code-scanning"
+            echo "❌ ============================================"
+            echo ""
+            exit 1
           else
-            echo "⚠️ Arquivos SARIF não encontrados. Continuando..."
+            echo "✅ Nenhuma vulnerabilidade encontrada. Pipeline pode continuar."
           fi
           
       - name: ✅ Análise de Segurança Aprovada
         if: success()
         run: |
           echo "✅ Código aprovado na análise de segurança!"
-          echo "📋 Detalhes completos: https://github.com/${{ github.repository }}/security/code-scanning"
+          echo "🎉 Todas as verificações de segurança passaram!"
 
   # ---------------------------------------------------------------------------
   # JOB 2: TESTES AUTOMATIZADOS
